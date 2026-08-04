@@ -1,0 +1,55 @@
+name: Build & Verify
+
+# Builds the SLPS_015.56 binary from source using the committed toolchain
+# (tools/ci/: gcc 2.6.3 cc1 + mipsel binutils 2.42) and verifies the output is
+# byte-identical to the target (SHA1 76322eeade5ebb22dca57fdeac7d68c30f06308d).
+#
+# Fails if the build does not produce a byte-identical binary — e.g. when a
+# newly decompiled function is mid-work.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        # cpp = C preprocessor (only preprocesses; does not affect output bytes).
+        # python3 = for maspsx. The cc1 compiler is a static i386 binary bundled
+        # in tools/ci/, so no gcc or multilib install is required for it; the
+        # Ubuntu kernel natively runs 32-bit ELF.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cpp python3
+
+      - name: Build & compare
+        run: |
+          ./ci_build.sh
+          echo "BINARY_SHA=$(sha1sum build/SLPS_015.56 | awk '{print $1}')" >> $GITHUB_ENV
+
+      - name: Remove built binary
+        # The build output is the original game binary and must not be
+        # distributed. It lives only in the ephemeral runner filesystem; this
+        # step removes it explicitly, and no artifact-upload action is used.
+        if: always()
+        run: rm -rf build
+
+      - name: Summarize
+        if: always()
+        run: |
+          echo "## Build result" >> $GITHUB_STEP_SUMMARY
+          EXPECTED="76322eeade5ebb22dca57fdeac7d68c30f06308d"
+          ACTUAL="$BINARY_SHA"
+          if [ -n "$ACTUAL" ] && [ "$ACTUAL" = "$EXPECTED" ]; then
+            printf '### ✅ MATCH — byte-identical\n\n`%s`\n' "$ACTUAL" >> $GITHUB_STEP_SUMMARY
+          elif [ -n "$ACTUAL" ]; then
+            printf '### ❌ MISMATCH\n\nexpected `%s`\nactual   `%s`\n' "$EXPECTED" "$ACTUAL" >> $GITHUB_STEP_SUMMARY
+          else
+            printf '### ❌ BUILD FAILED — no binary produced\n' >> $GITHUB_STEP_SUMMARY
+          fi
